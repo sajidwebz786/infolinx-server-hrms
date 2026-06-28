@@ -13,6 +13,7 @@ import dotenv from 'dotenv';
 
 const app = express();
 
+
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(serverDir, '.env') });
 const port = process.env.PORT || 5000;
@@ -33,35 +34,33 @@ const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
 app.use('/uploads', express.static(uploadDir));
 
-const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "http://localhost:5173,http://localhost:5174")
-  .split(",")
-  .map((origin) => origin.trim().replace(/\/$/, ""))
+const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || 'http://localhost:5173,http://localhost:5174')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/$/, ''))
   .filter(Boolean);
+
+console.log('[CORS] allowedOrigins =', allowedOrigins);
+console.log('[CORS] CLIENT_URLS env =', process.env.CLIENT_URLS);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const cleanOrigin = origin ? origin.replace(/\/$/, "") : "";
+  const cleanOrigin = origin ? origin.replace(/\/$/, '') : '';
   const isLocalDevOrigin = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(cleanOrigin);
 
   if (!origin || allowedOrigins.includes(cleanOrigin) || isLocalDevOrigin) {
     if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Vary", "Origin");
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
     }
-
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
-  } else {
-    console.error("CORS blocked:", origin);
-    console.log("Allowed origins:", allowedOrigins);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    return next();
   }
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  next();
+  console.warn('[CORS] blocked origin:', cleanOrigin);
+  return res.status(403).json({ message: `CORS blocked for origin: ${cleanOrigin}` });
 });
 
 app.use(express.json({ limit: "10mb" }));
