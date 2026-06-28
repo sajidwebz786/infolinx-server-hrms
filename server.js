@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { Sequelize, DataTypes, Op } from 'sequelize';
@@ -10,14 +9,21 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 
 const app = express();
-const port = process.env.PORT || 5000;
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(serverDir, '.env') });
+const port = process.env.PORT || 5000;
 const uploadDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-const adminPortalDistDir = path.resolve(serverDir, '..', 'admin-portal', 'dist');
+const adminPortalDistDir = [
+  process.env.ADMIN_PORTAL_DIST,
+  path.resolve(serverDir, 'public'),
+  path.resolve(serverDir, '..', 'public'),
+  path.resolve(serverDir, '..', 'admin-portal', 'dist')
+].filter(Boolean).find((dir) => fs.existsSync(path.join(dir, 'index.html')));
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => cb(null, uploadDir),
@@ -2947,7 +2953,7 @@ app.patch('/api/relieving/:id', asyncRoute(async (req, res) => {
   res.json(relieving);
 }));
 
-if (fs.existsSync(path.join(adminPortalDistDir, 'index.html'))) {
+if (adminPortalDistDir) {
   app.use(express.static(adminPortalDistDir));
   app.use((req, res, next) => {
     if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
