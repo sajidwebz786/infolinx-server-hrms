@@ -9,12 +9,15 @@ import crypto from 'crypto';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 
 const app = express();
 const port = process.env.PORT || 5000;
 
+const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const uploadDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const adminPortalDistDir = path.resolve(serverDir, '..', 'admin-portal', 'dist');
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => cb(null, uploadDir),
@@ -2943,6 +2946,14 @@ app.patch('/api/relieving/:id', asyncRoute(async (req, res) => {
   if (req.body.status === 'Relieved') await relieving.Employee.update({ status: 'Relieved' });
   res.json(relieving);
 }));
+
+if (fs.existsSync(path.join(adminPortalDistDir, 'index.html'))) {
+  app.use(express.static(adminPortalDistDir));
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(adminPortalDistDir, 'index.html'));
+  });
+}
 
 app.use((err, _req, res, _next) => {
   console.error(err);
