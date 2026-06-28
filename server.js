@@ -35,30 +35,36 @@ app.use('/uploads', express.static(uploadDir));
 
 const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "http://localhost:5173,http://localhost:5174")
   .split(",")
-  .map((origin) => origin.trim())
+  .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
-const corsOptions = {
-  origin(origin, callback) {
-    const isLocalDevOrigin = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin || "");
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const cleanOrigin = origin ? origin.replace(/\/$/, "") : "";
+  const isLocalDevOrigin = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(cleanOrigin);
 
-    if (!origin || allowedOrigins.includes(origin) || isLocalDevOrigin) {
-      return callback(null, true);
+  if (!origin || allowedOrigins.includes(cleanOrigin) || isLocalDevOrigin) {
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
     }
 
-    console.error("CORS blocked for origin:", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  } else {
+    console.error("CORS blocked:", origin);
     console.log("Allowed origins:", allowedOrigins);
+  }
 
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
-};
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
 
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
+  next();
+});
+
+app.use(express.json({ limit: "10mb" }));
 
 const dbSslEnabled = /^(true|1|require)$/i.test(process.env.DB_SSL || '');
 const dbDialectOptions = dbSslEnabled ? { ssl: { require: true, rejectUnauthorized: false } } : {};
