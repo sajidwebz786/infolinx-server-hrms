@@ -23,6 +23,7 @@ const adminPortalDistDir = [
   process.env.ADMIN_PORTAL_DIST,
   path.resolve(serverDir, 'public'),
   path.resolve(serverDir, '..', 'public'),
+  path.resolve(serverDir, '..', 'admin-portal', 'dist-render'),
   path.resolve(serverDir, '..', 'admin-portal', 'dist')
 ].filter(Boolean).find((dir) => fs.existsSync(path.join(dir, 'index.html')));
 
@@ -34,10 +35,15 @@ const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
 app.use('/uploads', express.static(uploadDir));
 
-const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || 'http://localhost:5173,http://localhost:5174')
-  .split(',')
+const allowedOrigins = [
+  ...(process.env.CLIENT_URLS || process.env.CLIENT_URL || '').split(','),
+  'https://hrms.infolinx.com',
+  'https://www.hrms.infolinx.com',
+  'http://localhost:5173',
+  'http://localhost:5174'
+]
   .map((origin) => origin.trim().replace(/\/$/, ''))
-  .filter(Boolean);
+  .filter((origin, index, origins) => origin && origins.indexOf(origin) === index);
 
 console.log('[CORS] allowedOrigins =', allowedOrigins);
 console.log('[CORS] CLIENT_URLS env =', process.env.CLIENT_URLS);
