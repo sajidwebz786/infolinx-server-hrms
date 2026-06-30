@@ -356,6 +356,19 @@ const CandidateTest = sequelize.define('CandidateTest', {
   submittedAt: DataTypes.DATE
 });
 
+const CandidateOnboardingDocument = sequelize.define('CandidateOnboardingDocument', {
+  title: DataTypes.STRING,
+  category: { type: DataTypes.STRING, defaultValue: 'Document' },
+  status: { type: DataTypes.STRING, defaultValue: 'Pending' },
+  documentUrl: DataTypes.TEXT,
+  filename: DataTypes.STRING,
+  contentType: DataTypes.STRING,
+  size: DataTypes.INTEGER,
+  remarks: DataTypes.TEXT,
+  dueDate: DataTypes.DATEONLY,
+  submittedAt: DataTypes.DATE
+});
+
 const LearningPath = sequelize.define('LearningPath', {
   level: DataTypes.STRING,
   title: DataTypes.STRING,
@@ -456,6 +469,8 @@ Candidate.hasOne(Employee);
 Employee.belongsTo(Candidate);
 Candidate.hasMany(CandidateTest);
 CandidateTest.belongsTo(Candidate);
+Candidate.hasMany(CandidateOnboardingDocument);
+CandidateOnboardingDocument.belongsTo(Candidate);
 Employee.hasMany(OnboardingTask);
 OnboardingTask.belongsTo(Employee);
 Employee.hasMany(BgvCheck);
@@ -517,6 +532,17 @@ function signPortalToken(user) {
   return `${payload}.${signature}`;
 }
 
+function signCandidateOnboardingToken(candidate, ttlDays = 14) {
+  const payload = base64url(JSON.stringify({
+    type: 'candidate-onboarding',
+    id: candidate.id,
+    email: candidate.email,
+    exp: Date.now() + ttlDays * 24 * 60 * 60 * 1000
+  }));
+  const signature = crypto.createHmac('sha256', tokenSecret).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
 function verifyPortalToken(token) {
   const [payload, signature] = String(token || '').split('.');
   if (!payload || !signature) return null;
@@ -526,6 +552,45 @@ function verifyPortalToken(token) {
   const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
   if (!parsed.exp || parsed.exp < Date.now()) return null;
   return parsed;
+}
+
+function verifySignedToken(token, expectedType) {
+  const claims = verifyPortalToken(token);
+  if (!claims || claims.type !== expectedType) return null;
+  return claims;
+}
+
+const candidateOnboardingChecklist = [
+  'Aadhaar / Identity Proof',
+  'PAN Card',
+  'Passport Photograph',
+  'Address Proof',
+  'Education Certificates',
+  'Previous Offer Letter',
+  'Previous Relieving Letter',
+  'Previous Payslips',
+  'Bank Details / Cancelled Cheque',
+  'Form 16, if applicable',
+  'Emergency Contact Details',
+  'Signed Offer Letter'
+];
+
+async function ensureCandidateOnboardingDocuments(candidate) {
+  const dueDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const records = [];
+  for (const title of candidateOnboardingChecklist) {
+    const [record] = await CandidateOnboardingDocument.findOrCreate({
+      where: { CandidateId: candidate.id, title },
+      defaults: { CandidateId: candidate.id, title, category: 'Document', dueDate, status: 'Pending' }
+    });
+    records.push(record);
+  }
+  return records;
+}
+
+function candidateOnboardingUrl(candidate) {
+  const token = signCandidateOnboardingToken(candidate);
+  return `${process.env.CANDIDATE_PORTAL_URL || process.env.ADMIN_PORTAL_URL || 'http://localhost:5173'}/candidate-onboarding/${token}`;
 }
 
 function scoreCandidate(candidate, jd) {
@@ -1917,9 +1982,9 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
 }));
 
 app.get('/api/bootstrap', asyncRoute(async (_req, res) => {
-  const [jds, candidates, panelists, interviews, offers, employees, mails, learningCourses, learningAttempts, departments, masterRecords, candidateTests, extensionRequests, projectAssignments, sprintBoards, workTasks, certifications, auditLogs] = await Promise.all([
+  const [jds, candidates, panelists, interviews, offers, employees, mails, learningCourses, learningAttempts, departments, masterRecords, candidateTests, candidateOnboardingDocuments, extensionRequests, projectAssignments, sprintBoards, workTasks, certifications, auditLogs] = await Promise.all([
     JobDescription.findAll({ order: [['createdAt', 'DESC']] }),
-    Candidate.findAll({ include: [JobDescription, Offer, CandidateTest], order: [['updatedAt', 'DESC']] }),
+    Candidate.findAll({ include: [JobDescription, Offer, CandidateTest, CandidateOnboardingDocument], order: [['updatedAt', 'DESC']] }),
     Panelist.findAll({ order: [['name', 'ASC']] }),
     Interview.findAll({ include: [Candidate, Panelist], order: [['scheduledAt', 'DESC']] }),
     Offer.findAll({ include: [Candidate], order: [['updatedAt', 'DESC']] }),
@@ -1930,6 +1995,7 @@ app.get('/api/bootstrap', asyncRoute(async (_req, res) => {
     Department.findAll({ order: [['name', 'ASC']] }),
     MasterRecord.findAll({ order: [['module', 'ASC'], ['name', 'ASC']] }),
     CandidateTest.findAll({ include: [Candidate], order: [['updatedAt', 'DESC']] }),
+    CandidateOnboardingDocument.findAll({ include: [Candidate], order: [['updatedAt', 'DESC']] }),
     ExtensionRequest.findAll({ include: [Employee], order: [['updatedAt', 'DESC']] }),
     ProjectAssignment.findAll({ include: [Employee], order: [['updatedAt', 'DESC']] }),
     SprintBoard.findAll({ include: [Employee], order: [['updatedAt', 'DESC']] }),
@@ -1937,7 +2003,7 @@ app.get('/api/bootstrap', asyncRoute(async (_req, res) => {
     Certification.findAll({ include: [Employee], order: [['updatedAt', 'DESC']] }),
     AuditLog.findAll({ order: [['createdAt', 'DESC']], limit: 50 })
   ]);
-  res.json({ jds, candidates, panelists, interviews, offers, employees, mails, learningCourses, learningAttempts, departments, masterRecords, candidateTests, extensionRequests, projectAssignments, sprintBoards, workTasks, certifications, auditLogs, integrations: { teams: teamsIntegrationStatus(), email: { mode: process.env.MAIL_MODE || 'queue', host: process.env.MAIL_HOST || process.env.SMTP_HOST || 'smtp.office365.com', from: process.env.MAIL_FROM || process.env.MAIL_USER || process.env.SMTP_USER || '' } } });
+  res.json({ jds, candidates, panelists, interviews, offers, employees, mails, learningCourses, learningAttempts, departments, masterRecords, candidateTests, candidateOnboardingDocuments, extensionRequests, projectAssignments, sprintBoards, workTasks, certifications, auditLogs, integrations: { teams: teamsIntegrationStatus(), email: { mode: process.env.MAIL_MODE || 'queue', host: process.env.MAIL_HOST || process.env.SMTP_HOST || 'smtp.office365.com', from: process.env.MAIL_FROM || process.env.MAIL_USER || process.env.SMTP_USER || '' } } });
 }));
 
 app.get('/api/employee-portal/bootstrap', asyncRoute(async (req, res) => {
@@ -2072,10 +2138,11 @@ app.post('/api/candidates/:id/action', asyncRoute(async (req, res) => {
     await writeAudit({ action: 'Generated candidate assessment from workflow action', entityType: 'CandidateTest', entityId: test.id, details: { candidateId: candidate.id } });
     return res.json({ candidate, test, message: 'Test Link Sent mail processed.' });
   }
+  const onboardingUrl = candidateOnboardingUrl(candidate);
   const links = {
     test: `${process.env.ADMIN_PORTAL_URL || 'http://localhost:5173'}/candidate-test/${candidate.id}`,
-    documents: `${process.env.USER_PORTAL_URL || 'http://localhost:5174'}/documents/${candidate.id}`,
-    onboarding: `${process.env.USER_PORTAL_URL || 'http://localhost:5174'}/onboarding/${candidate.id}`
+    documents: onboardingUrl,
+    onboarding: onboardingUrl
   };
   const map = {
     test: {
@@ -2106,10 +2173,14 @@ app.post('/api/candidates/:id/action', asyncRoute(async (req, res) => {
   };
   const config = map[action];
   if (!config) return res.status(400).json({ message: 'Invalid candidate action.' });
+  let documents = [];
+  if (['documents', 'onboarding'].includes(action)) {
+    documents = await ensureCandidateOnboardingDocuments(candidate);
+  }
   await candidate.update({ status: config.status });
   await queueMail({ to: candidate.email, kind: `Candidate ${config.status}`, subject: config.subject, html: config.html });
-  await writeAudit({ action: config.status, entityType: 'Candidate', entityId: candidate.id, details: { email: candidate.email } });
-  res.json({ candidate, message: `${config.status} mail processed.` });
+  await writeAudit({ action: config.status, entityType: 'Candidate', entityId: candidate.id, details: { email: candidate.email, onboardingUrl: ['documents', 'onboarding'].includes(action) ? links.onboarding : undefined, documentCount: documents.length } });
+  res.json({ candidate, documents, onboardingUrl: ['documents', 'onboarding'].includes(action) ? links.onboarding : undefined, message: `${config.status} mail processed.` });
 }));
 
 app.post('/api/candidates/:id/tests/generate', asyncRoute(async (req, res) => {
@@ -2487,6 +2558,8 @@ app.post('/api/employees', asyncRoute(async (req, res) => {
   const required = ['employeeCode', 'name', 'email', 'department', 'designation', 'joiningDate'];
   const missing = required.filter((field) => !req.body[field]);
   if (missing.length) return res.status(400).json({ message: `Missing required fields: ${missing.join(', ')}` });
+  const employeeType = req.body.employeeType || 'New Employee';
+  const isExistingEmployee = employeeType === 'Existing Employee';
   const employee = await Employee.create({
     employeeCode: req.body.employeeCode,
     name: req.body.name,
@@ -2499,18 +2572,20 @@ app.post('/api/employees', asyncRoute(async (req, res) => {
     status: req.body.status || 'Active',
     leaveBalance: Number(req.body.leaveBalance ?? 24)
   });
-  await OnboardingTask.bulkCreate(['Identity proof', 'Address proof', 'Education certificates', 'Bank details', 'Policy acknowledgement'].map((title) => ({
-    title,
-    category: 'Document',
-    EmployeeId: employee.id,
-    dueDate: employee.joiningDate,
-    documentUrl: `/demo-documents/${employee.employeeCode}-${title.toLowerCase().replaceAll(' ', '-')}.pdf`
-  })));
-  await BgvCheck.bulkCreate(['Identity verification', 'Address verification', 'Education verification', 'Employment verification'].map((type) => ({
-    type,
-    vendor: 'Preferred BGV Partner',
-    EmployeeId: employee.id
-  })));
+  if (!isExistingEmployee) {
+    await OnboardingTask.bulkCreate(['Identity proof', 'Address proof', 'Education certificates', 'Bank details', 'Policy acknowledgement'].map((title) => ({
+      title,
+      category: 'Document',
+      EmployeeId: employee.id,
+      dueDate: employee.joiningDate,
+      documentUrl: `/demo-documents/${employee.employeeCode}-${title.toLowerCase().replaceAll(' ', '-')}.pdf`
+    })));
+    await BgvCheck.bulkCreate(['Identity verification', 'Address verification', 'Education verification', 'Employment verification'].map((type) => ({
+      type,
+      vendor: 'Preferred BGV Partner',
+      EmployeeId: employee.id
+    })));
+  }
   if (req.body.createPortalAccess !== false) await provisionPortalUser({ employee });
   res.status(201).json(employee);
 }));
@@ -2654,6 +2729,48 @@ app.post('/api/offers/:id/accept', asyncRoute(async (req, res) => {
   await ensureLifecycleDemoData();
   await writeAudit({ action: 'Accepted offer and generated employee record', entityType: 'Employee', entityId: employee.id, details: { candidateId: offer.Candidate.id, employeeCode, officialEmail } });
   res.status(201).json(employee);
+}));
+
+app.get('/api/candidate-onboarding/:token', asyncRoute(async (req, res) => {
+  const claims = verifySignedToken(req.params.token, 'candidate-onboarding');
+  if (!claims) return res.status(401).json({ message: 'Candidate onboarding link is invalid or expired.' });
+  const candidate = await Candidate.findByPk(claims.id, { include: [JobDescription, Offer, CandidateOnboardingDocument] });
+  if (!candidate || candidate.email !== claims.email) return res.status(404).json({ message: 'Candidate onboarding record not found.' });
+  const documents = await ensureCandidateOnboardingDocuments(candidate);
+  const fresh = await CandidateOnboardingDocument.findAll({ where: { CandidateId: candidate.id }, order: [['id', 'ASC']] });
+  res.json({
+    candidate: {
+      id: candidate.id,
+      name: candidate.name,
+      email: candidate.email,
+      roleApplied: candidate.roleApplied || candidate.JobDescription?.title || '',
+      status: candidate.status,
+      offerStatus: candidate.Offer?.status || ''
+    },
+    documents: fresh.length ? fresh : documents,
+    expiresAt: new Date(claims.exp).toISOString()
+  });
+}));
+
+app.post('/api/candidate-onboarding/:token/documents/:id', upload.single('document'), asyncRoute(async (req, res) => {
+  const claims = verifySignedToken(req.params.token, 'candidate-onboarding');
+  if (!claims) return res.status(401).json({ message: 'Candidate onboarding link is invalid or expired.' });
+  const document = await CandidateOnboardingDocument.findByPk(req.params.id, { include: [Candidate] });
+  if (!document || document.CandidateId !== claims.id || document.Candidate?.email !== claims.email) {
+    return res.status(404).json({ message: 'Document checklist item not found for this candidate.' });
+  }
+  if (!req.file) return res.status(400).json({ message: 'Please choose a document to upload.' });
+  const updated = await document.update({
+    status: 'Submitted',
+    documentUrl: `/uploads/${req.file.filename}`,
+    filename: req.file.originalname,
+    contentType: req.file.mimetype,
+    size: req.file.size,
+    remarks: req.body.remarks || 'Submitted from temporary candidate onboarding page',
+    submittedAt: new Date()
+  });
+  await writeAudit({ action: 'Candidate uploaded onboarding document', entityType: 'CandidateOnboardingDocument', entityId: updated.id, details: { candidateId: claims.id, title: updated.title, filename: updated.filename } });
+  res.json(updated);
 }));
 
 app.patch('/api/onboarding/:id', asyncRoute(async (req, res) => {
