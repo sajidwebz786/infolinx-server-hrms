@@ -103,6 +103,109 @@ const mailTransporter = process.env.MAIL_MODE === 'smtp' ? nodemailer.createTran
   tls: { ciphers: 'TLSv1.2', minVersion: 'TLSv1.2' }
 }) : null;
 
+const companyBrand = {
+  name: process.env.COMPANY_NAME || 'Infolinx',
+  email: process.env.HR_ADMIN_EMAIL || process.env.MAIL_FROM || process.env.MS_GRAPH_MAIL_USER_ID || process.env.MS_GRAPH_USER_ID || process.env.MAIL_USER || process.env.SMTP_USER || 'hr@infolinx.com',
+  website: process.env.COMPANY_WEBSITE || process.env.ADMIN_PORTAL_URL || process.env.CLIENT_URL || 'https://hrms.infolinx.com',
+  address: process.env.COMPANY_ADDRESS || 'Human Resources, Infolinx',
+  logoCid: 'infolinx-logo'
+};
+
+const inlineLogoPath = [
+  process.env.COMPANY_LOGO_PATH,
+  path.resolve(serverDir, '..', 'logo.png'),
+  path.resolve(serverDir, 'public', 'logo.png'),
+  path.resolve(serverDir, '..', 'admin-portal', 'public', 'logo.png')
+].filter(Boolean).find((logoPath) => fs.existsSync(logoPath));
+
+function normalizeMailBody(html = '') {
+  const source = String(html || '').trim() || '<p>No message body.</p>';
+  if (source.includes('data-infolinx-email="official"')) return source;
+  const bodyMatch = source.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  return bodyMatch ? bodyMatch[1] : source;
+}
+
+function brandedEmailHtml({ subject, html, kind, from }) {
+  const body = normalizeMailBody(html);
+  const safeSubject = escapeHtml(subject || 'Official communication');
+  const safeKind = escapeHtml(kind || 'HR Communication');
+  const safeFrom = escapeHtml(from || companyBrand.email);
+  const logoSrc = inlineLogoPath ? `cid:${companyBrand.logoCid}` : `${String(companyBrand.website).replace(/\/$/, '')}/logo.png`;
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${safeSubject}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#eef4fb;font-family:Arial,Helvetica,sans-serif;color:#172033;">
+    <div data-infolinx-email="official" style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Official ${companyBrand.name} communication</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef4fb;margin:0;padding:28px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:720px;border-collapse:collapse;background:#ffffff;border:1px solid #dbe7f4;border-radius:18px;overflow:hidden;box-shadow:0 18px 45px rgba(8,47,73,.12);">
+            <tr>
+              <td style="background:#0b2f4f;padding:0;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="padding:24px 28px;">
+                      <img src="${logoSrc}" alt="${companyBrand.name}" width="150" style="display:block;max-width:150px;height:auto;border:0;outline:none;text-decoration:none;background:#ffffff;border-radius:12px;padding:8px;">
+                    </td>
+                    <td align="right" style="padding:24px 28px;color:#d9f7ff;font-size:13px;line-height:1.5;">
+                      <strong style="display:block;color:#ffffff;font-size:15px;">${safeKind}</strong>
+                      <span>Official Staff Communication</span>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="height:6px;background:#18b6c7;font-size:0;line-height:0;">&nbsp;</td>
+            </tr>
+            <tr>
+              <td style="padding:30px 32px 12px;">
+                <h1 style="margin:0;color:#0b2f4f;font-size:24px;line-height:1.25;font-weight:700;">${safeSubject}</h1>
+                <p style="margin:8px 0 0;color:#66717f;font-size:13px;line-height:1.5;">Sent by ${safeFrom}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 32px 30px;">
+                <div style="font-size:15px;line-height:1.65;color:#243142;">${body}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#f7fbff;border-top:1px solid #dbe7f4;padding:22px 32px;color:#66717f;font-size:12px;line-height:1.6;">
+                <strong style="display:block;color:#0b2f4f;font-size:14px;margin-bottom:4px;">${companyBrand.name} HRMS</strong>
+                <span>${escapeHtml(companyBrand.address)}</span><br>
+                <a href="${escapeHtml(companyBrand.website)}" style="color:#1d4ed8;text-decoration:none;">${escapeHtml(companyBrand.website)}</a>
+                <p style="margin:12px 0 0;">This is an official ${companyBrand.name} communication. Please do not share confidential HRMS links, credentials, or documents outside authorized channels.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function brandedMailAttachments(attachments = [], html = '') {
+  if (!inlineLogoPath || !html.includes(`cid:${companyBrand.logoCid}`)) return attachments;
+  return [
+    ...attachments,
+    {
+      filename: path.basename(inlineLogoPath),
+      content: fs.readFileSync(inlineLogoPath).toString('base64'),
+      encoding: 'base64',
+      contentType: 'image/png',
+      cid: companyBrand.logoCid,
+      contentId: companyBrand.logoCid,
+      isInline: true
+    }
+  ];
+}
+
 const User = sequelize.define('User', {
   name: DataTypes.STRING,
   email: { type: DataTypes.STRING, allowNull: false, unique: true },
@@ -603,29 +706,32 @@ function scoreCandidate(candidate, jd) {
 
 async function queueMail({ to, subject, html, kind, from, attachments = [], direction = 'outbound' }) {
   const recipients = Array.isArray(to) ? to.join(', ') : to;
-  const attachmentMeta = attachments.map((attachment) => ({
+  const outgoingHtml = direction === 'outbound' ? brandedEmailHtml({ subject, html, kind, from }) : html;
+  const outgoingAttachments = direction === 'outbound' ? brandedMailAttachments(attachments, outgoingHtml) : attachments;
+  const attachmentMeta = outgoingAttachments.filter((attachment) => !attachment.isInline).map((attachment) => ({
     filename: attachment.filename,
     contentType: attachment.contentType,
     size: attachment.size || String(attachment.content || '').length
   }));
   const canSend = Boolean(mailTransporter || process.env.MAIL_MODE === 'graph');
-  const mail = await MailLog.create({ to: recipients, from, subject, html, kind, direction, attachments: attachmentMeta, status: canSend ? 'Sending' : 'Queued' });
+  const mail = await MailLog.create({ to: recipients, from, subject, html: outgoingHtml, kind, direction, attachments: attachmentMeta, status: canSend ? 'Sending' : 'Queued' });
   if (!canSend) return mail;
   try {
     if (process.env.MAIL_MODE === 'graph') {
-      await sendGraphMail({ to: recipients, subject, html, from, attachments });
+      await sendGraphMail({ to: recipients, subject, html: outgoingHtml, from, attachments: outgoingAttachments });
     } else {
       await mailTransporter.sendMail({
         from: process.env.MAIL_FROM || process.env.MAIL_USER || process.env.SMTP_USER,
         replyTo: from || undefined,
         to: recipients,
         subject,
-        html,
-        attachments: attachments.map((attachment) => ({
+        html: outgoingHtml,
+        attachments: outgoingAttachments.map((attachment) => ({
           filename: attachment.filename,
           content: attachment.content,
           encoding: attachment.encoding,
-          contentType: attachment.contentType
+          contentType: attachment.contentType,
+          cid: attachment.cid
         }))
       });
     }
@@ -674,7 +780,9 @@ async function sendGraphMail({ to, subject, html, from, attachments = [] }) {
     '@odata.type': '#microsoft.graph.fileAttachment',
     name: attachment.filename,
     contentType: attachment.contentType || 'application/octet-stream',
-    contentBytes: attachment.content
+    contentBytes: Buffer.isBuffer(attachment.content) ? attachment.content.toString('base64') : attachment.content,
+    isInline: Boolean(attachment.isInline),
+    contentId: attachment.contentId || attachment.cid || undefined
   }));
   const response = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(sender)}/sendMail`, {
     method: 'POST',
